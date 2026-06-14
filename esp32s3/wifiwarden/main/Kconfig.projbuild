@@ -1,0 +1,78 @@
+menu "WiFiWardern Scanner Configuration"
+
+    menu "Scanner WiFi Settings"
+        config SCANNER_AP_SSID
+            string "AP SSID to connect"
+            default "WifiWarden"
+            help
+                SSID of the AP board's WiFi hotspot.
+                The scanner board connects to this WiFi to enter the AP's LAN.
+
+        config SCANNER_AP_PASSWORD
+            string "AP Password"
+            default "CHANGE_ME"
+            help
+                Password for the AP board's WiFi hotspot.
+    endmenu
+
+    menu "MQTT Cloud Settings"
+        config MQTT_BROKER_URI
+            string "MQTT Broker URI"
+            default "mqtt://YOUR_SERVER_IP:1883"
+            help
+                MQTT broker URI for cloud communication.
+
+        config MQTT_USERNAME
+            string "MQTT Username"
+            default "wifiwarden"
+            help
+                MQTT broker authentication username.
+
+        config MQTT_PASSWORD
+            string "MQTT Password"
+            default "CHANGE_ME"
+            help
+                MQTT broker authentication password.
+
+        config MQTT_PUBLISH_INTERVAL
+            int "Data Publish Interval (seconds)"
+            default 30
+            range 10 300
+            help
+                Interval between periodic data uploads to cloud.
+    endmenu
+
+    menu "Port Scan Settings"
+        config PORT_SCAN_INTERVAL
+            int "Port Scan Interval (seconds)"
+            default 120
+            range 30 600
+            help
+                Interval between periodic network port scans.
+    endmenu
+
+    menu "Deauth Detection Settings"
+        config DEAUTH_THRESHOLD
+            int "Deauth Detection Threshold"
+            default 3
+            range 1 20
+            help
+                Number of Deauth frames within the 5-second detection window
+                required to trigger a Deauth attack alert.
+    endmenu
+
+    menu "Feature Toggles"
+        config HONEYPOT_ENABLED
+            bool "Enable Honeypot SSID"
+            default false
+            help
+                Enable fake SSID broadcasting for honeypot functionality.
+
+        config BEEPER_ENABLED
+            bool "Enable Beeper"
+            default true
+            help
+                Enable buzzer for security alerts.
+    endmenu
+
+endmenu

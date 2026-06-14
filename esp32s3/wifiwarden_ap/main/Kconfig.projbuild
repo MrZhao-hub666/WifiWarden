@@ -1,0 +1,54 @@
+menu "WiFiWardern AP Settings"
+
+    menu "WiFi AP Settings"
+        config AP_SSID
+            string "AP SSID"
+            default "WifiWarden"
+            help
+                SSID of the WiFi AP broadcast by this device.
+
+        config AP_PASSWORD
+            string "AP Password"
+            default "CHANGE_ME"
+            help
+                Password for the WiFi AP.
+    endmenu
+
+    menu "WiFi STA Settings"
+        config WIFI_SSID
+            string "WiFi SSID"
+            default "YOUR_WIFI_SSID"
+            help
+                SSID of the upstream WiFi network to connect to.
+
+        config WIFI_PASSWORD
+            string "WiFi Password"
+            default "YOUR_WIFI_PASSWORD"
+            help
+                Password for the upstream WiFi network.
+    endmenu
+
+    menu "NAT Settings"
+        config ENABLE_NAPT
+            bool "Enable NAPT (Network Address Port Translation)"
+            default y
+            help
+                Enable NAPT to allow AP clients to access internet via STA connection.
+                This is required for the WiFi bridge functionality.
+    endmenu
+
+    menu "Device Info"
+        config DEVICE_NAME
+            string "Device Name"
+            default "WiFiWardern-AP"
+            help
+                Human-readable device name.
+
+        config DEVICE_TYPE
+            string "Device Type"
+            default "ESP32S3-AP"
+            help
+                Device type identifier.
+    endmenu
+
+endmenu

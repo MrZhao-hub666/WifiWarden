@@ -1,0 +1,42 @@
+# 密钥文件
+.env
+.env.local
+
+# SSL 证书（敏感文件）
+nginx/certs/*.pem
+nginx/certs/*.key
+nginx/certs/*.crt
+
+# 构建输出
+*.bin
+*.elf
+*.map
+build/
+
+# ESP-IDF 生成配置（只保留 defaults 作为源）
+sdkconfig
+sdkconfig.old
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+**/.venv/
+
+# 运行时生成数据
+app/wifiwarden.db
+app/data/
+mosquitto/data/
+mosquitto/log/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+Desktop.ini
+.directory
+
+# IDE
+.vscode/
+.idea/
+*.user
+*.suo

@@ -1,0 +1,33 @@
+# ESP-IDF Configuration for WiFiWarden ESP32-S3 Scanner Board
+# ⚠️ 请根据您的实际环境修改下面的配置 ⚠️
+
+# Flash Configuration
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# Scanner WiFi Settings — 连接到AP板的WifiWarden热点
+CONFIG_SCANNER_AP_SSID="WifiWarden"
+CONFIG_SCANNER_AP_PASSWORD="YOUR_AP_PASSWORD"
+
+# MQTT Cloud Settings — 修改为您的服务器地址和凭据
+CONFIG_MQTT_BROKER_URI="mqtt://YOUR_SERVER_IP:1883"
+CONFIG_MQTT_USERNAME="YOUR_MQTT_USERNAME"
+CONFIG_MQTT_PASSWORD="YOUR_MQTT_PASSWORD"
+CONFIG_MQTT_PUBLISH_INTERVAL=10
+
+# Port Scan Settings
+CONFIG_PORT_SCAN_INTERVAL=10
+
+# Deauth Detection Settings
+CONFIG_DEAUTH_THRESHOLD=3
+
+# Feature Toggles
+CONFIG_HONEYPOT_ENABLED=n
+CONFIG_BEEPER_ENABLED=y
+
+# Compiler: -O2 avoids GCC 13.2 ICE on esp_lcd_panel_rgb.c with -Og
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# SPI Master ISR in IRAM (prevent screen corruption from WiFi interrupt)
+CONFIG_SPI_MASTER_ISR_IN_IRAM=y

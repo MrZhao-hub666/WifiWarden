@@ -1,0 +1,7 @@
+menu "cJSON"
+
+config ESP_COMPONENT_CJSON
+    bool "cJSON component"
+    default y
+
+endmenu

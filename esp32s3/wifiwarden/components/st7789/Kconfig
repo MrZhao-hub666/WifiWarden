@@ -1,0 +1,7 @@
+menu "ST7789 Display"
+
+config ESP_COMPONENT_ST7789
+    bool "ST7789 display driver"
+    default y
+
+endmenu

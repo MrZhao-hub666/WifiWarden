@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>WiFiWarden // 无线安全态势感知终端</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700&display=swap');
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+
+:root{
+  --g0:#000300;--g1:#000e00;--g2:#004a00;--g3:#00cc00;--g4:#00ff41;--g5:#55ff55;
+  --green:#00ff41;--red:#ff2222;--yellow:#ffd500;--cyan:#00e5ff;--orange:#ff7700;
+  --border:#083808;--glow:0 0 10px rgba(0,255,65,0.1);
+  --font:'Share Tech Mono','Courier New',monospace;--tfont:'Orbitron',var(--font)
+}
+body{
+  background:var(--g0);color:var(--g4);font-family:var(--font);
+  min-height:100vh;overflow-x:hidden;font-size:16px;line-height:1.6;
+}
+body::after{content:'';position:fixed;inset:0;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,5,0,0.05)2px,rgba(0,5,0,0.05)4px);
+  pointer-events:none;z-index:9998}
+body::before{content:'';position:fixed;inset:0;
+  background:radial-gradient(ellipse at center,transparent 60%,rgba(0,0,0,0.8)100%);
+  pointer-events:none;z-index:9997}
+
+/* Header */
+.header{
+  background:#000a00;border-bottom:1px solid #0a2a0a;
+  padding:10px 24px;display:flex;justify-content:space-between;align-items:center;
+  box-shadow:0 0 20px rgba(0,255,65,0.05);z-index:10;position:relative;height:52px;
+}
+.logo{font-family:var(--tfont);font-size:22px;letter-spacing:4px;color:var(--g4);
+  text-shadow:0 0 16px rgba(0,255,65,0.5),0 0 32px rgba(0,255,65,0.2)}
+.logo .blink{display:inline-block;width:8px;height:18px;background:var(--g4);margin-left:4px;animation:bl 1s infinite}
+@keyframes bl{0%,50%{opacity:1}51%,100%{opacity:0}}
+.h-right{display:flex;align-items:center;gap:16px;font-size:14px}
+.st{display:flex;align-items:center;gap:6px}
+.dot{width:9px;height:9px;border-radius:50%;animation:dot-blink 1.2s infinite}
+.dot.off{background:var(--yellow);box-shadow:0 0 8px var(--yellow);animation:flash 1.5s infinite}
+.dot.dead{background:var(--red);box-shadow:0 0 8px var(--red);animation:none}
+@keyframes dot-blink{0%,100%{opacity:1;box-shadow:0 0 8px var(--g4)}50%{opacity:0.3;box-shadow:0 0 2px var(--g4)}}
+@keyframes flash{0%,100%{opacity:1}50%{opacity:0.2}}
+.bar{color:#0a2a0a}
+
+/* Layout */
+.grid{
+  display:grid;grid-template-columns:1fr 380px;height:calc(100vh - 52px);padding:8px 20px;gap:8px;position:relative;z-index:10
+}
+.left{display:flex;flex-direction:column;gap:8px;overflow:hidden}
+.right{display:flex;flex-direction:column;gap:8px;overflow:hidden}
+
+/* Panels */
+.panel{
+  background:rgba(0,12,0,0.8);border:1px solid var(--border);padding:12px;position:relative;
+  box-shadow:inset 0 0 20px rgba(0,30,0,0.3),var(--glow);overflow:hidden
+}
+.panel::before{content:'';position:absolute;top:-1px;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(0,255,65,0.3),transparent)}
+.p-title{
+  font-family:var(--tfont);font-size:12px;letter-spacing:2px;color:var(--g3);
+  margin-bottom:10px;padding-bottom:8px;border-bottom:1px dashed rgba(0,80,0,0.4);
+  text-shadow:0 0 8px rgba(0,255,65,0.3);text-transform:uppercase;display:flex;align-items:center;gap:8px
+}
+.p-title .led{width:8px;height:8px;border-radius:50%;background:var(--g4);box-shadow:0 0 8px var(--g4);animation:led-pulse 1.2s infinite}
+@keyframes led-pulse{0%,100%{box-shadow:0 0 4px var(--g4)}50%{box-shadow:0 0 12px var(--g4),0 0 20px rgba(0,255,65,0.5)}}
+
+/* Stats */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.s-card{
+  background:rgba(0,18,0,0.5);border:1px solid var(--border);padding:14px 10px;text-align:center;
+  box-shadow:inset 0 0 12px rgba(0,30,0,0.3);transition:box-shadow .3s
+}
+.s-card:hover{box-shadow:inset 0 0 20px rgba(0,255,65,0.08),0 0 12px rgba(0,255,65,0.08)}
+.s-v{display:block;font-family:var(--tfont);font-size:38px;color:var(--g4);
+  text-shadow:0 0 20px rgba(0,255,65,0.5),0 0 40px rgba(0,255,65,0.15);line-height:1.1}
+.s-l{font-size:14px;color:var(--g2);letter-spacing:1.5px;margin-top:6px}
+
+/* Charts */
+.charts{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.cht{height:260px}
+
+/* Device table */
+.dev-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.dev-inner{overflow-y:auto;overflow-x:hidden;flex:1;scrollbar-width:none;-ms-overflow-style:none}
+.dev-inner::-webkit-scrollbar{display:none}
+.dev-t{width:100%;border-collapse:collapse}
+.dev-t th{text-align:left;padding:10px 12px;font-size:15px;color:var(--g2);
+  border-bottom:1px solid var(--border);letter-spacing:1px;
+  background:rgba(0,15,0,0.5);position:sticky;top:0;z-index:1}
+.dev-t td{padding:10px 12px;border-bottom:1px solid rgba(0,40,0,0.3);font-size:16px}
+.dev-t tr:hover{background:rgba(0,255,65,0.03)}
+.dev-t .mac{font-size:15px}.dev-t .vendor{color:var(--cyan)}.dev-t .port{color:var(--yellow);font-size:15px}
+.r-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}
+.r0{background:#00cc44;box-shadow:0 0 8px #00cc44}.r1{background:#88cc00;box-shadow:0 0 8px #88cc00}
+.r2{background:var(--yellow);box-shadow:0 0 8px var(--yellow)}.r3{background:var(--orange);box-shadow:0 0 8px var(--orange)}
+.r4{background:var(--red);box-shadow:0 0 8px var(--red)}
+
+/* Log */
+.log-inner{overflow-y:auto;overflow-x:hidden;scrollbar-width:none;-ms-overflow-style:none}
+.log-inner::-webkit-scrollbar{display:none}
+.log-l{padding:4px 0;border-bottom:1px solid rgba(0,30,0,0.3);font-size:15px}
+.log-l .ts{color:var(--g2);margin-right:8px}
+.log-l.sys{color:var(--cyan)}.log-l.mqtt{color:var(--g3)}.log-l.ai{color:var(--orange)}
+.log-l.honey{color:var(--red);animation:alert-pulse 2s infinite}
+@keyframes alert-pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+
+/* Alerts */
+.alt-inner{overflow-y:auto;overflow-x:hidden;scrollbar-width:none;-ms-overflow-style:none}
+.alt-inner::-webkit-scrollbar{display:none}
+.alt-i{padding:8px 0;border-bottom:1px solid rgba(0,40,0,0.3);font-size:15px}
+.alt-tag{display:inline-block;padding:2px 8px;font-size:11px;margin-right:6px;letter-spacing:0.5px}
+.alt-tag.r3{background:rgba(255,120,0,0.15);color:var(--orange);border:1px solid rgba(255,120,0,0.3)}
+.alt-tag.r4{background:rgba(255,0,0,0.15);color:var(--red);border:1px solid rgba(255,0,0,0.3)}
+
+/* Actions */
+.acts{display:flex;gap:8px;flex-wrap:wrap}
+.btn{
+  background:rgba(0,255,65,0.05);border:1px solid var(--border);color:var(--g3);
+  padding:10px 18px;font-family:var(--tfont);font-size:14px;cursor:pointer;letter-spacing:1.5px;
+  text-transform:uppercase;transition:all .2s
+}
+.btn:hover{background:rgba(0,255,65,0.12);border-color:var(--g3);box-shadow:0 0 10px rgba(0,255,65,0.15);color:var(--g4)}
+.btn.danger{color:var(--red);border-color:rgba(255,0,0,0.25)}
+.btn.danger:hover{background:rgba(255,0,0,0.1);box-shadow:0 0 10px rgba(255,0,0,0.15)}
+.btn.warn{color:var(--orange);border-color:rgba(255,120,0,0.25)}
+.btn.warn:hover{background:rgba(255,120,0,0.1);box-shadow:0 0 10px rgba(255,120,0,0.15)}
+.btn.small{padding:4px 10px;font-size:12px}
+.btn.hp-active{color:var(--red);border-color:rgba(255,0,0,0.4);animation:hp-pulse 2s infinite}
+@keyframes hp-pulse{0%,100%{opacity:1}50%{opacity:0.6}}
+
+/* 扫描中动画 */
+@keyframes scan-blink{0%,100%{opacity:1}50%{opacity:0.3}}
+.scanning{animation:scan-blink 0.8s infinite}
+.scan-done{color:var(--g4);transition:color 0.3s}
+
+/* Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9999;display:flex;align-items:center;justify-content:center}
+.modal-box{background:var(--g1);border:1px solid var(--border);padding:24px;max-width:480px;width:90%;box-shadow:0 0 40px rgba(0,255,65,0.08)}
+.modal-box h3{color:var(--orange);font-family:var(--tfont);font-size:14px;margin-bottom:16px;letter-spacing:2px}
+.modal-box p{color:var(--g4);font-size:15px;line-height:1.7;margin-bottom:16px}
+.modal-box .acts{justify-content:flex-end}
+
+/* Honeypot */
+.hp-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0}
+.hp-status{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:14px}
+.hp-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.hp-dot.on{background:var(--red);box-shadow:0 0 10px var(--red);animation:hp-pulse 2s infinite}
+.hp-dot.off{background:var(--g2)}
+.hp-log-inner{overflow-y:auto;overflow-x:hidden;flex:1;scrollbar-width:none}
+.hp-log-inner::-webkit-scrollbar{display:none}
+.hp-log{font-size:13px;padding:3px 0;border-bottom:1px solid rgba(0,30,0,0.3);line-height:1.5}
+.hp-log .ts{color:var(--g2);margin-right:6px}
+.hp-log .ip{color:var(--cyan)}
+.hp-log .cred{color:var(--yellow)}
+.hp-log .cmd{color:var(--orange)}
+
+@media(max-width:1100px){.grid{grid-template-columns:1fr}.charts{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">WiFiWarden<span class="blink"></span></div>
+  <div class="h-right">
+    <div class="st">MQTT<span id="mqDot" class="dot off"></span><span id="mqLabel">--</span></div>
+    <span class="bar">│</span>
+    <div class="st">WS<span id="wsDot" class="dot off"></span>在线</div>
+    <span class="bar">│</span>
+    <div class="st">风险<span id="riskVal" style="color:var(--g4);margin-left:4px;font-family:var(--tfont);font-size:16px">0</span></div>
+    <span class="bar">│</span>
+    <span id="clock" style="color:var(--g2);font-size:14px">--:--:--</span>
+  </div>
+</div>
+
+<div class="grid">
+<div class="left">
+  <div class="stats">
+    <div class="s-card"><span class="s-v" id="vDev">0</span><span class="s-l">设备数</span></div>
+    <div class="s-card"><span class="s-v" id="vAlert">0</span><span class="s-l">告警数</span></div>
+    <div class="s-card"><span class="s-v" id="vDeauth">0/3</span><span class="s-l">Deauth/5秒</span></div>
+    <div class="s-card"><span class="s-v" id="vRisk">0</span><span class="s-l">最高风险</span></div>
+  </div>
+
+  <div class="charts">
+    <div class="panel"><div class="p-title"><span class="led"></span>安全趋势</div><div id="cTrend" class="cht"></div></div>
+    <div class="panel" style="overflow-y:auto"><div class="p-title"><span class="led"></span>开放端口</div>
+      <table class="dev-t" style="width:100%"><thead><tr><th>IP地址</th><th>开放端口</th></tr></thead>
+      <tbody id="portTableBody"><tr><td colspan="2" style="color:var(--g2);text-align:center;padding:20px">--</td></tr></tbody></table>
+    </div>
+  </div>
+
+  <div class="panel dev-wrap">
+    <div class="p-title"><span class="led"></span>设备列表 <span id="devCnt" style="font-size:14px;color:var(--g2);font-weight:400">(0)</span></div>
+    <div class="dev-inner"><table class="dev-t"><tbody id="devBody"></tbody></table></div>
+  </div>
+</div>
+
+<div class="right">
+  <div class="panel" style="height:180px;display:flex;flex-direction:column">
+    <div class="p-title"><span class="led"></span>控制台</div>
+    <div class="log-inner" style="flex:1" id="logBox"></div>
+  </div>
+
+  <div class="panel" style="height:180px;display:flex;flex-direction:column">
+    <div class="p-title"><span class="led"></span>告警列表</div>
+    <div class="alt-inner" style="flex:1" id="altBox"></div>
+  </div>
+
+  <div class="panel hp-wrap">
+    <div class="p-title"><span class="led"></span>蜜罐</div>
+    <div class="hp-status">
+      <span class="hp-dot off" id="hpDot"></span>
+      <span id="hpStatusLabel">未启动</span>
+      <span style="color:var(--g2);font-size:13px" id="hpPorts"></span>
+    </div>
+    <div class="acts" style="margin-bottom:6px">
+      <button class="btn small" id="hpStartBtn" onclick="toggleHoneypot(true)">启动</button>
+      <button class="btn small danger" id="hpStopBtn" onclick="toggleHoneypot(false)" style="display:none">停止</button>
+    </div>
+    <div class="hp-log-inner" id="hpLogBox"><div style="color:var(--g2);font-size:13px">暂无捕获记录</div></div>
+  </div>
+
+  <div class="panel">
+    <div class="p-title">控制面板</div>
+    <div class="acts">
+      <button class="btn warn" onclick="deepScanAll()">🛡 深度扫描</button>
+      <button class="btn" onclick="startScanAll()">🔍 开始扫描</button>
+    </div>
+    <div style="margin-top:8px;font-size:14px">
+      <span style="color:var(--g2)">扫描状态:</span>
+      <span id="scanStatus" style="color:var(--green)">Scan:clean</span>
+    </div>
+    <div style="margin-top:4px;font-size:14px">
+      <span style="color:var(--g2)">蜜罐端侧:</span>
+      <span id="hpSideStatus" style="color:var(--g2)">off</span>
+    </div>
+  </div>
+
+  <div class="panel" style="max-height:200px;display:flex;flex-direction:column">
+    <div class="p-title"><span class="led" style="background:var(--red);box-shadow:0 0 8px var(--red)"></span>黑名单 <span id="blCnt" style="font-size:14px;color:var(--g2);font-weight:400">(0)</span></div>
+    <div class="alt-inner" style="flex:1" id="blBox"><div style="color:var(--g2);font-size:14px">暂无黑名单设备</div></div>
+  </div>
+</div>
+</div>
+
+<script>
+const WS = `${location.protocol==='https:'?'wss:':'ws:'}//${location.host}/ws`;
+let socket, tChart, rTimer;
+let g_selectedScanMac = '';
+
+// ========== WebSocket ==========
+function cws(){
+  socket = new WebSocket(WS);
+  socket.onopen = ()=>{
+    document.getElementById('wsDot').classList.remove('off','dead');
+    document.getElementById('mqDot').classList.remove('off');
+    l('sys','[OK] WebSocket 已连接');
+    fa();
+  };
+  socket.onclose = ()=>{
+    document.getElementById('wsDot').classList.add('off');
+    l('sys','[警告] WebSocket断开，3秒后重连');
+    g_boardDataActive = false;  // 断连后用DB兜底
+    rTimer = setTimeout(cws,3000);
+  };
+  socket.onmessage = e => { try{dispatch(JSON.parse(e.data))}catch(ex){} };
+}
+
+// ========== 数据获取（仅拉取非板子直传的数据） ==========
+let g_deviceList = [];  // 设备列表，由WebSocket板子数据实时维护
+function fa(){
+  // 设备列表不再从数据库读，由 dispatch 从板子 sense 数据直接构建
+  fetch('/api/alerts?limit=20').then(r=>r.json()).then(d=>{if(d.code===0)ra(d.data)});
+  fetch('/api/statistics').then(r=>r.json()).then(d=>{if(d.code===0)rs(d.data)});
+  fetch('/api/honeypot/status').then(r=>r.json()).then(d=>{if(d.code===0)rh(d.data)});
+  fetch('/api/honeypot/logs').then(r=>r.json()).then(d=>{if(d.code===0)rp(d.data)});
+}
+
+// ========== WebSocket消息分发 ==========
+let g_curDeauth=0, g_curWeak=0, g_curPort=0;   // 实时值（趋势图用）
+function dispatch(m){
+  switch(m.type){
+    case 'mqtt_message':
+      const p = m.payload;
+      g_boardDataActive = true;
+      document.getElementById('mqDot').classList.remove('off');
+
+      // -- Deauth（板子直传值） --
+      g_curDeauth = (p.deauth && p.deauth.in_window) || 0;
+      document.getElementById('vDeauth').textContent=`${g_curDeauth}/3`;
+      if(g_curDeauth >= 3 && g_lastDeauthWindow < 3) { l('sys','⚠ DEAUTH攻击告警！窗口内'+g_curDeauth+'次'); }
+      g_lastDeauthWindow = g_curDeauth;
+
+      // -- 风险等级 --
+      const rl = p.risk_level||0;
+      document.getElementById('vRisk').textContent=rl; document.getElementById('riskVal').textContent=rl;
+
+      // -- 告警数（从服务端累计值刷新） --
+      fetch('/api/statistics').then(r=>r.json()).then(d=>{if(d.code===0) rs(d.data)});
+
+      // -- 弱口令实时计数 --
+      g_curWeak = 0;
+      if(p.hosts) p.hosts.forEach(h=>{ if(h.weak_http||h.weak_telnet||h.weak_ftp) g_curWeak++; });
+      if(g_curWeak > 0 && !g_weakFlag) { l('honey','🔍 '+g_curWeak+'台弱口令设备！'); g_weakFlag=true; }
+      if(g_curWeak === 0) g_weakFlag=false;
+
+      // -- 端口风险实时计数 --
+      g_curPort = 0;
+      if(p.hosts) p.hosts.forEach(h=>{ g_curPort += (h.open_ports||[]).length; });
+      if(g_curPort > 0 && !g_portFlag) { l('sys','🔓 发现'+g_curPort+'个高危端口'); g_portFlag=true; }
+      if(g_curPort === 0) g_portFlag=false;
+
+      // -- 扫描状态（与ESP32屏幕同步） --
+      const scanEl = document.getElementById('scanStatus');
+      const prevScan = scanEl.dataset.running === '1';
+      if(p.scan_running){
+        scanEl.textContent='Scan:scanning'; scanEl.style.color='var(--yellow)';
+        scanEl.className='scanning'; scanEl.dataset.running='1';
+        if(!prevScan) l('sys','📡 扫描进行中...');
+      } else if(p.hosts_scanned > 0 || p.total_open_ports > 0){
+        scanEl.textContent=`Scan:H:${p.hosts_scanned||0} P:${p.total_open_ports||0}`;
+        scanEl.style.color='var(--green)'; scanEl.className='';
+        if(prevScan) l('sys',`✅ 扫描完成：${p.hosts_scanned||0}台主机，${p.total_open_ports||0}个开放端口`);
+        scanEl.dataset.running='0';
+      } else {
+        if(prevScan) l('sys','✅ 扫描完成：未发现新风险');
+        scanEl.textContent='Scan:clean'; scanEl.style.color='var(--green)'; scanEl.className='';
+        scanEl.dataset.running='0';
+      }
+
+      // -- 蜜罐端侧（与ESP32屏幕同步） --
+      const hpSide = document.getElementById('hpSideStatus');
+      if(p.honeypot){ hpSide.textContent='ON'; hpSide.style.color='var(--green)'; }
+      else { hpSide.textContent='off'; hpSide.style.color='var(--g2)'; }
+
+      // -- 设备数 --
+      if(p.ap_devices !== undefined) document.getElementById('vDev').textContent = p.ap_devices;
+
+      // -- 实时构建设备列表（板子直传，不依赖数据库） --
+      // 过滤掉黑名单中的设备
+      const blSet = new Set(g_blacklistMacs);
+      const devMap = {};
+      // 优先用hosts（有扫描结果），用known_hosts补充
+      (p.hosts||[]).forEach(h=>{
+        const mac = h.mac_str||h.mac||'';
+        if(!mac || blSet.has(mac)) return;
+        devMap[mac] = {mac:mac, ip:h.ip_str||h.ip||'', hostname:h.hostname||'',
+                       vendor:h.vendor||'Unknown', risk_level:h.risk_level||0,
+                       open_ports:h.open_ports||[]};
+      });
+      (p.known_hosts||[]).forEach(h=>{
+        const mac = h.mac||'';
+        if(!mac || devMap[mac] || blSet.has(mac)) return;
+        devMap[mac] = {mac:mac, ip:h.ip||'', hostname:h.hostname||'',
+                       vendor:h.vendor||'Unknown', risk_level:0, open_ports:[]};
+      });
+      g_deviceList = Object.values(devMap);
+      rd(g_deviceList);
+
+      // -- 更新开放端口表格 --
+      const ptBody = document.getElementById('portTableBody');
+      const portRows = g_deviceList.filter(d=>(d.open_ports||[]).length>0);
+      if(!portRows.length){
+        ptBody.innerHTML='<tr><td colspan="2" style="color:var(--g2);text-align:center;padding:20px">暂无开放端口</td></tr>';
+      } else {
+        ptBody.innerHTML = portRows.map(d=>
+          `<tr><td>${d.ip||d.mac||'?'}</td><td class="port">${(d.open_ports||[]).join('、')}</td></tr>`
+        ).join('');
+      }
+      break;
+
+    case 'ai_analysis':l('ai',`AI分析:${m.mac} 等级${m.analysis.risk_level} ${m.analysis.risk_reason||''}`);fa();break;
+    case 'honeypot_alert':l('honey',`蜜罐捕获 ${m.payload?.attacker_ip||'?'} - ${m.payload?.type||''}`);fa();break;
+    case 'scan_triggered':
+      l('sys',`${m.deep?'🛡 深度扫描':'扫描'}命令已下发至 ${m.mac}`);
+      // 立即同步扫描动画
+      const sel = document.getElementById('scanStatus');
+      sel.textContent='Scan:scanning'; sel.style.color='var(--yellow)'; sel.className='scanning';
+      break;
+  }
+}
+let g_lastDeauthWindow=0, g_weakFlag=false, g_portFlag=false;
+
+// ========== 统计更新（仅作为WebSocket断开时的兜底，不从DB覆盖板子数据） ==========
+let g_boardDataActive = false;  // WebSocket数据是否活跃
+let g_totalAlerts = 0;          // 累计告警总数（从服务端获取）
+function rs(s){
+  // 告警数始终用服务端累计值
+  g_totalAlerts = s.total_alerts||0;
+  document.getElementById('vAlert').textContent = g_totalAlerts;
+  // 设备数和风险等级：优先用WebSocket板子直传数据，数据库只是兜底
+  if(!g_boardDataActive){
+    document.getElementById('vDev').textContent = s.total_devices||0;
+    document.getElementById('vRisk').textContent = s.risk_level||0;
+    document.getElementById('riskVal').textContent = s.risk_level||0;
+  }
+}
+
+// ========== 设备列表渲染（每行带操作按钮） ==========
+function rd(ds){
+  const t=document.getElementById('devBody'),c=document.getElementById('devCnt');
+  if(!ds||!ds.length){
+    t.innerHTML='<tr><td colspan="6" style="color:var(--g2);text-align:center;padding:30px;font-size:16px">暂无设备</td></tr>';
+    c.textContent='(0)';return
+  }
+  c.textContent=`(${ds.length})`;
+  let h='<tr><th>MAC地址</th><th>IP</th><th>设备</th><th>风险</th><th>端口</th><th>操作</th></tr>';
+  ds.forEach(d=>{
+    const ports=(d.open_ports||[]).slice(0,5).join(',')||'--';
+    h+=`<tr>
+      <td class="mac">${d.mac||'--'}</td>
+      <td>${d.ip||'--'}</td>
+      <td class="vendor">${d.hostname||d.vendor||'未知'}</td>
+      <td><span class="r-dot r${d.risk_level||0}"></span>Lv${d.risk_level||0}</td>
+      <td class="port">${ports}</td>
+      <td style="white-space:nowrap">
+        <button class="btn small" onclick="deepScanConfirm('${d.mac}')">扫描</button>
+        <button class="btn small danger" onclick="blacklistDevice('${d.mac}')">拉黑</button>
+      </td></tr>`;
+    /* 端口分布已由WebSocket实时更新 */
+  });
+  t.innerHTML=h;
+}
+
+// ========== 告警列表 ==========
+function ra(as){
+  const e=document.getElementById('altBox');
+  if(!as||!as.length){e.innerHTML='<div style="color:var(--g2);font-size:14px">无活跃告警</div>';return}
+  e.innerHTML=as.slice(0,10).map(a=>`<div class="alt-i"><span class="alt-tag r${a.risk_level||0}">Lv${a.risk_level||0}</span>${a.threat_type||a.alert_type||'?'} - ${a.device_mac||a.mac||''}<br><span style="font-size:12px;color:var(--g2)">${a.description||a.risk_reason||''}</span></div>`).join('');
+}
+
+// ========== 蜜罐控制 ==========
+function rh(h){
+  const dot=document.getElementById('hpDot'), st=document.getElementById('hpStatusLabel');
+  const portsEl=document.getElementById('hpPorts'), startBtn=document.getElementById('hpStartBtn');
+  const stopBtn=document.getElementById('hpStopBtn');
+  if(h.running){
+    dot.className='hp-dot on'; st.textContent='运行中';
+    portsEl.textContent=`Telnet:${h.telnet_port} HTTP:${h.http_port}`;
+    startBtn.style.display='none'; stopBtn.style.display='inline-block';
+  } else {
+    dot.className='hp-dot off'; st.textContent='未启动';
+    portsEl.textContent=''; startBtn.style.display='inline-block'; stopBtn.style.display='none';
+  }
+}
+function toggleHoneypot(start){
+  // ===== 立即更新所有UI，不等待任何异步请求 =====
+  const hpSide = document.getElementById('hpSideStatus');
+  const dot = document.getElementById('hpDot');
+  const st = document.getElementById('hpStatusLabel');
+  const portsEl = document.getElementById('hpPorts');
+  const startBtn = document.getElementById('hpStartBtn');
+  const stopBtn = document.getElementById('hpStopBtn');
+
+  if(start){
+    // 管理面板蜜罐状态：立即变ON
+    dot.className='hp-dot on'; st.textContent='运行中';
+    portsEl.textContent='Telnet:23 HTTP:80';
+    startBtn.style.display='none'; stopBtn.style.display='inline-block';
+    // 端侧状态：立即变ON
+    hpSide.textContent='ON'; hpSide.style.color='var(--green)';
+    l('sys','[蜜罐] 正在启动...');
+
+    fetch('/api/honeypot/start',{method:'POST'}).then(r=>{if(!r.ok)throw r;return r.json()}).then(d=>{
+      if(d.code===0){ l('sys','[蜜罐] '+d.message); fa(); }
+      else { l('sys','⚠ [蜜罐] '+d.message); }
+    }).catch(async e=>{
+      let reason = e.message||e;
+      if(e instanceof Response) reason = await errText(e);
+      l('sys','❌ [蜜罐] 启动失败: '+reason);
+    });
+  } else {
+    // 管理面板蜜罐状态：立即变OFF
+    dot.className='hp-dot off'; st.textContent='未启动';
+    portsEl.textContent='';
+    startBtn.style.display='inline-block'; stopBtn.style.display='none';
+    // 端侧状态：立即变OFF
+    hpSide.textContent='off'; hpSide.style.color='var(--g2)';
+    l('sys','[蜜罐] 正在停止...');
+
+    fetch('/api/honeypot/stop',{method:'POST'}).then(r=>{if(!r.ok)throw r;return r.json()}).then(d=>{
+      if(d.code===0){ l('sys','[蜜罐] '+d.message); fa(); }
+      else { l('sys','⚠ [蜜罐] '+d.message); }
+    }).catch(async e=>{
+      let reason = e.message||e;
+      if(e instanceof Response) reason = await errText(e);
+      l('sys','❌ [蜜罐] 停止失败: '+reason);
+    });
+  }
+}
+
+// ========== 蜜罐日志 ==========
+function rp(logs){
+  const e=document.getElementById('hpLogBox');
+  if(!logs||!logs.length){e.innerHTML='<div style="color:var(--g2);font-size:13px">暂无捕获记录</div>';return}
+  e.innerHTML=logs.slice(0,20).map(l=>{
+    try{
+      const data=JSON.parse(l.input_data||'{}');
+      if(l.honeypot_type==='telnet'){
+        return `<div class="hp-log"><span class="ts">${l.timestamp||''}</span><span class="ip">${l.attacker_ip||'?'}</span> Telnet登录: <span class="cred">${data.username||'?'}/${data.password||'?'}</span></div>`;
+      } else if(l.honeypot_type==='http'){
+        const params=data.params||{};
+        return `<div class="hp-log"><span class="ts">${l.timestamp||''}</span><span class="ip">${l.attacker_ip||'?'}</span> HTTP表单: ${Object.entries(params).map(([k,v])=>k+'='+v).join('&')}</div>`;
+      }
+      return `<div class="hp-log"><span class="ts">${l.timestamp||''}</span><span class="ip">${l.attacker_ip||'?'}</span> ${l.honeypot_type}: ${l.input_data||''}</div>`;
+    }catch(e){
+      return `<div class="hp-log"><span class="ts">${l.timestamp||''}</span><span class="ip">${l.attacker_ip||'?'}</span> ${l.input_data||''}</div>`;
+    }
+  }).join('');
+}
+
+// ========== 深度扫描弹窗（合法性确认） ==========
+function deepScanConfirm(mac){
+  g_selectedScanMac = mac;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'scanModal';
+  overlay.innerHTML = `
+    <div class="modal-box">
+      <h3>⚡ 安全扫描确认</h3>
+      <p>
+        即将对设备 <strong style="color:var(--cyan)">${mac}</strong> 执行深度安全扫描：<br>
+        • 高危及常见端口探测（TCP Connect）<br>
+        • 弱口令检测（Telnet/FTP/HTTP默认密码）<br>
+        • Web管理后台路径枚举（30+常见路径）<br><br>
+        <span style="color:var(--yellow)">⚠ 请确保该设备属于您或已获得授权。</span><br>
+        继续操作即表示您确认上述行为的合法性。
+      </p>
+      <div class="acts">
+        <button class="btn" onclick="closeModal('scanModal')">取消</button>
+        <button class="btn warn" onclick="doDeepScan()">确认扫描</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+function doDeepScan(){
+  if(!g_selectedScanMac) return;
+  closeModal('scanModal');
+  fetch(`/api/scan/${g_selectedScanMac}?deep=true`,{method:'POST'})
+    .then(r=>{if(!r.ok)return r.then(e=>{throw e});return r.json()}).then(d=>{
+      l('sys',`🛡 ${d.message||'深度扫描已触发'}`);
+    }).catch(async e=>{
+      let reason = e.message||e;
+      if(e instanceof Response) reason = await errText(e);
+      l('sys','❌ 深度扫描失败: '+reason);
+    });
+}
+function closeModal(id){
+  const el=document.getElementById(id);
+  if(el)el.remove();
+}
+
+// ========== 拉黑单个设备 ==========
+function blacklistDevice(mac){
+  if(!confirm(`确定拉黑设备 ${mac}？`)) return;
+  fetch(`/api/devices/${mac}/blacklist`,{method:'POST'})
+    .then(r=>{if(!r.ok)return r.then(e=>{throw e});return r.json()}).then(d=>{
+      l('sys',`⛔ 已拉黑设备 ${mac}`);
+      fa(); rbl();
+    }).catch(async e=>{
+      let reason = e.message||e;
+      if(e instanceof Response) reason = await errText(e);
+      l('sys','❌ 拉黑失败: '+reason);
+    });
+}
+
+// ========== 黑名单管理 ==========
+let g_blacklistMacs = [];  // 缓存黑名单MAC列表
+function rbl(){
+  fetch('/api/blacklist').then(r=>r.json()).then(d=>{
+    if(d.code!==0) return;
+    const list=d.data||[];
+    g_blacklistMacs = list;  // 更新缓存
+    const e=document.getElementById('blBox'), c=document.getElementById('blCnt');
+    c.textContent=`(${list.length})`;
+    if(!list.length){ e.innerHTML='<div style="color:var(--g2);font-size:14px">暂无黑名单设备</div>'; return; }
+    e.innerHTML=list.map(mac=>
+      `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(0,40,0,0.3)">
+        <span style="color:var(--red);font-size:14px">${mac}</span>
+        <button class="btn small" onclick="unblacklist('${mac}')">移除</button>
+      </div>`
+    ).join('');
+  });
+}
+function unblacklist(mac){
+  fetch(`/api/devices/${mac}/blacklist`,{method:'DELETE'})
+    .then(r=>{if(!r.ok)throw r;return r.json()}).then(d=>{
+      l('sys',`✅ 已将 ${mac} 移出黑名单`);
+      rbl();
+    }).catch(async e=>{
+      let reason = e.message||e; if(e instanceof Response) reason = await errText(e);
+      l('sys','❌ 移除失败: '+reason);
+    });
+}
+
+// 深度扫描全部设备（弹出合法性确认）
+function deepScanAll(){
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'scanAllModal';
+  overlay.innerHTML = `
+    <div class="modal-box">
+      <h3>⚡ 深度扫描所有设备</h3>
+      <p>
+        即将对所有已发现的设备执行深度安全扫描：<br>
+        • 高危及常见端口探测<br>
+        • 弱口令检测（Telnet/FTP/HTTP默认密码）<br>
+        • Web管理后台路径枚举<br><br>
+        <span style="color:var(--yellow)">⚠ 请确保所有目标设备均属于您或已获得授权。</span>
+      </p>
+      <div class="acts">
+        <button class="btn" onclick="closeModal('scanAllModal')">取消</button>
+        <button class="btn warn" onclick="doDeepScanAll()">确认扫描全部</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+function doDeepScanAll(){
+  closeModal('scanAllModal');
+  const scanEl = document.getElementById('scanStatus');
+  scanEl.textContent='Scan:scanning'; scanEl.style.color='var(--yellow)';
+  scanEl.className='scanning';
+  if(!g_deviceList.length){l('sys','暂无设备可扫描');scanEl.textContent='Scan:clean';scanEl.style.color='var(--green)';scanEl.className='';return}
+  // ESP32收到broadcast后扫描全部设备，只需发一条命令
+  fetch(`/api/scan/broadcast?deep=true`,{method:'POST'}).then(r=>{if(!r.ok)throw r;return r.json()}).then(d=>{
+    l('sys','🛡 深度扫描已下发至'+g_deviceList.length+'台设备');
+  }).catch(async e=>{
+    let reason = e.message||e; if(e instanceof Response) reason = await errText(e);
+    l('sys','❌ 深度扫描失败: '+reason);
+    scanEl.textContent='Scan:clean'; scanEl.style.color='var(--green)'; scanEl.className='';
+  });
+}
+
+// 普通扫描全部设备
+function startScanAll(){
+  const scanEl = document.getElementById('scanStatus');
+  scanEl.textContent='Scan:scanning'; scanEl.style.color='var(--yellow)';
+  scanEl.className='scanning';
+  if(!g_deviceList.length){l('sys','暂无设备可扫描');scanEl.textContent='Scan:clean';scanEl.style.color='var(--green)';scanEl.className='';return}
+  fetch(`/api/scan/broadcast?deep=false`,{method:'POST'}).then(r=>{if(!r.ok)throw r;return r.json()}).then(d=>{
+    l('sys','🔍 普通扫描已下发至'+g_deviceList.length+'台设备');
+  }).catch(async e=>{
+    let reason = e.message||e; if(e instanceof Response) reason = await errText(e);
+    l('sys','❌ 普通扫描失败: '+reason);
+    scanEl.textContent='Scan:clean'; scanEl.style.color='var(--green)'; scanEl.className='';
+  });
+}
+
+// ========== 日志 ==========
+function l(t,m){
+  const now=new Date().toLocaleTimeString('zh-CN',{hour12:false});
+  const cls=t==='honey'?'honey':t==='sys'?'sys':t==='ai'?'ai':'mqtt';
+  document.getElementById('logBox').innerHTML=`<div class="log-l ${cls}"><span class="ts">${now}</span>${m}</div>`+document.getElementById('logBox').innerHTML;
+}
+// 提取fetch响应中的错误文本
+async function errText(r){ try{const j=await r.json();return j.message||j.detail||r.statusText}catch(e){return r.statusText||'网络错误'} }
+
+// ========== 图表 ==========
+let deauthData=[], weakData=[], portRiskData=[];
+function initCharts(){
+  const base={textStyle:{color:'#00cc00'},backgroundColor:'transparent',
+    grid:{top:30,right:8,bottom:22,left:44},
+    xAxis:{type:'time',axisLine:{lineStyle:{color:'#0a3a0a'}},axisLabel:{color:'#00aa00',fontSize:11},splitLine:{show:false}},
+    yAxis:{axisLine:{lineStyle:{color:'#0a3a0a'}},axisLabel:{color:'#00aa00',fontSize:11},minInterval:1,splitLine:{lineStyle:{color:'rgba(0,50,0,0.3)'}}},
+    legend:{top:2,right:4,textStyle:{color:'#00aa00',fontSize:11},itemWidth:12,itemHeight:8,
+      data:[
+        {name:'Deauth攻击',icon:'roundRect',itemStyle:{color:'#ff2222'}},
+        {name:'弱口令',icon:'roundRect',itemStyle:{color:'#ff7700'}},
+        {name:'端口风险',icon:'roundRect',itemStyle:{color:'#ffd500'}}
+      ]}
+  };
+  tChart=echarts.init(document.getElementById('cTrend'));
+  tChart.setOption({...base,
+    series:[
+      {name:'Deauth攻击',type:'line',data:[],smooth:true,symbol:'circle',symbolSize:3,
+        lineStyle:{color:'#ff2222',width:2},
+        areaStyle:{color:{type:'linear',x:0,y:0,x2:0,y2:1,colorStops:[{offset:0,color:'rgba(255,34,34,0.15)'},{offset:1,color:'rgba(255,34,34,0)'}]}}},
+      {name:'弱口令',type:'line',data:[],smooth:true,symbol:'circle',symbolSize:3,
+        lineStyle:{color:'#ff7700',width:2},
+        areaStyle:{color:{type:'linear',x:0,y:0,x2:0,y2:1,colorStops:[{offset:0,color:'rgba(255,119,0,0.15)'},{offset:1,color:'rgba(255,119,0,0)'}]}}},
+      {name:'端口风险',type:'line',data:[],smooth:true,symbol:'circle',symbolSize:3,
+        lineStyle:{color:'#ffd500',width:2},
+        areaStyle:{color:{type:'linear',x:0,y:0,x2:0,y2:1,colorStops:[{offset:0,color:'rgba(255,213,0,0.15)'},{offset:1,color:'rgba(255,213,0,0)'}]}}}
+    ]});
+  // 每2秒采样实时值推入趋势图（与ESP32 sense上传间隔一致）
+  setInterval(()=>{
+    const now = +new Date();
+    deauthData.push([now, g_curDeauth]); if(deauthData.length>60) deauthData.shift();
+    weakData.push([now, g_curWeak]); if(weakData.length>60) weakData.shift();
+    portRiskData.push([now, g_curPort]); if(portRiskData.length>60) portRiskData.shift();
+    tChart.setOption({series:[{data:[...deauthData]},{data:[...weakData]},{data:[...portRiskData]}]});
+  },2000);
+}
+setInterval(()=>{document.getElementById('clock').textContent=new Date().toLocaleTimeString('zh-CN',{hour12:false})},1000);
+cws();initCharts();rbl();setInterval(fa,10000);setInterval(rbl,15000);
+</script>
+</body>
+</html>
