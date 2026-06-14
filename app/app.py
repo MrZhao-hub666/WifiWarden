@@ -48,15 +48,24 @@ def on_mqtt_message(topic: str, payload: dict):
     try:
         if "sense" in topic:
             _handle_sense_data(topic, payload)
+            state.update_sense_stats(payload)
         elif "honeypot" in topic:
             _handle_honeypot_data(topic, payload)
+            return  # _handle_honeypot_data 内部已做了 broadcast
+        elif topic in ("telnet", "http"):
+            # 蜜罐本地捕获回调（非 MQTT 消息，是内部调用）
+            _handle_honeypot_data(topic, payload)
+            return
+        else:
+            # 未知 topic，仅转发不处理
+            print(f"[MQTT] 收到未知 topic: {topic}")
 
         asyncio.run_coroutine_threadsafe(
             broadcast({"type": "mqtt_message", "topic": topic, "payload": payload,
                         "timestamp": datetime.now().isoformat()}), loop
         )
     except Exception as e:
-        print(f"[MQTT] 消息处理错误: {e}")
+        print(f"[MQTT] 消息处理错误: {e}", exc_info=True)
 
 
 def _handle_sense_data(topic: str, payload: dict):

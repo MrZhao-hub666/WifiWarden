@@ -14,7 +14,18 @@ class AppState:
         self.blacklist: set = set()
         self.honeypot_logs: list = []
         self.alerts: list = []
+        # 缓存最新 sense 数据，get_statistics 返回实时值
+        self._latest_devices = 0
+        self._latest_risk = 0
+        self._latest_deauth_window = 0
         self._load_blacklist()
+
+    def update_sense_stats(self, payload: dict):
+        """收到 sense 数据时更新统计缓存"""
+        self._latest_devices = payload.get("ap_devices", self._latest_devices)
+        self._latest_risk = payload.get("risk_level", self._latest_risk)
+        deauth = payload.get("deauth", {})
+        self._latest_deauth_window = deauth.get("in_window", self._latest_deauth_window)
 
     # -- 黑名单 --
     def _load_blacklist(self):
@@ -68,9 +79,12 @@ class AppState:
         return self.alerts[:limit]
 
     def get_statistics(self) -> dict:
-        return {"total_devices": 0, "risk_level": 0,
-                "total_alerts": len(self.alerts), "deauth_window": 0,
-                "deauth_threshold": 3, "total_honeypot_hits": len(self.honeypot_logs)}
+        return {"total_devices": self._latest_devices,
+                "risk_level": self._latest_risk,
+                "total_alerts": len(self.alerts),
+                "deauth_window": self._latest_deauth_window,
+                "deauth_threshold": 3,
+                "total_honeypot_hits": len(self.honeypot_logs)}
 
 
 state = AppState()

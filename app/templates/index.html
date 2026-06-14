@@ -270,11 +270,15 @@ function cws(){
 
 // ========== 数据获取（仅拉取非板子直传的数据） ==========
 let g_deviceList = [];  // 设备列表，由WebSocket板子数据实时维护
+let g_lastSenseTime = 0;  // 最后一次收到 sense 数据的时间
 function fa(){
   // 设备列表不再从数据库读，由 dispatch 从板子 sense 数据直接构建
   fetch('/api/alerts?limit=20').then(r=>r.json()).then(d=>{if(d.code===0)ra(d.data)});
   fetch('/api/statistics').then(r=>r.json()).then(d=>{if(d.code===0)rs(d.data)});
-  fetch('/api/honeypot/status').then(r=>r.json()).then(d=>{if(d.code===0)rh(d.data)});
+  // 蜜罐状态：仅当用户没有正在操作蜜罐时才从 API 刷新 UI
+  if(!g_hpUserAction){
+    fetch('/api/honeypot/status').then(r=>r.json()).then(d=>{if(d.code===0)rh(d.data)});
+  }
   fetch('/api/honeypot/logs').then(r=>r.json()).then(d=>{if(d.code===0)rp(d.data)});
 }
 
@@ -284,7 +288,19 @@ function dispatch(m){
   switch(m.type){
     case 'mqtt_message':
       const p = m.payload;
+      // 仅处理 sense 主题的设备数据
+      if(!p || !m.topic || m.topic.indexOf('sense')===-1){
+        g_boardDataActive = true;
+        document.getElementById('mqDot').classList.remove('off');
+        // 非 sense 消息只做兜底更新
+        if(p && p.ap_devices !== undefined) document.getElementById('vDev').textContent = p.ap_devices;
+        if(p && p.risk_level !== undefined) { document.getElementById('vRisk').textContent=p.risk_level; document.getElementById('riskVal').textContent=p.risk_level; }
+        break;
+      }
+
+      // ===== sense 数据 =====
       g_boardDataActive = true;
+      g_lastSenseTime = Date.now();  // 记录最后收到sense的时间
       document.getElementById('mqDot').classList.remove('off');
 
       // -- Deauth（板子直传值） --
@@ -296,9 +312,6 @@ function dispatch(m){
       // -- 风险等级 --
       const rl = p.risk_level||0;
       document.getElementById('vRisk').textContent=rl; document.getElementById('riskVal').textContent=rl;
-
-      // -- 告警数（从服务端累计值刷新） --
-      fetch('/api/statistics').then(r=>r.json()).then(d=>{if(d.code===0) rs(d.data)});
 
       // -- 弱口令实时计数 --
       g_curWeak = 0;
@@ -383,18 +396,22 @@ function dispatch(m){
 }
 let g_lastDeauthWindow=0, g_weakFlag=false, g_portFlag=false;
 
-// ========== 统计更新（仅作为WebSocket断开时的兜底，不从DB覆盖板子数据） ==========
-let g_boardDataActive = false;  // WebSocket数据是否活跃
+// ========== 统计更新 ==========
+let g_boardDataActive = false;  // WebSocket板子数据是否活跃
 let g_totalAlerts = 0;          // 累计告警总数（从服务端获取）
+const SENSE_TIMEOUT = 15000;    // 15秒未收到 sense 数据则视为板子离线
 function rs(s){
   // 告警数始终用服务端累计值
   g_totalAlerts = s.total_alerts||0;
   document.getElementById('vAlert').textContent = g_totalAlerts;
-  // 设备数和风险等级：优先用WebSocket板子直传数据，数据库只是兜底
-  if(!g_boardDataActive){
+  // 板子数据超时（15秒未收到sense）→ 用API值兜底
+  const boardAlive = g_boardDataActive && (Date.now() - g_lastSenseTime < SENSE_TIMEOUT);
+  if(!boardAlive){
+    g_boardDataActive = false;
     document.getElementById('vDev').textContent = s.total_devices||0;
     document.getElementById('vRisk').textContent = s.risk_level||0;
     document.getElementById('riskVal').textContent = s.risk_level||0;
+    document.getElementById('vDeauth').textContent = `${s.deauth_window||0}/3`;
   }
 }
 
@@ -447,6 +464,7 @@ function rh(h){
 }
 function toggleHoneypot(start){
   // ===== 立即更新所有UI，不等待任何异步请求 =====
+  g_hpUserAction = true;  // 标记用户正在操作蜜罐，fa()不要覆盖
   const hpSide = document.getElementById('hpSideStatus');
   const dot = document.getElementById('hpDot');
   const st = document.getElementById('hpStatusLabel');
@@ -457,16 +475,18 @@ function toggleHoneypot(start){
   if(start){
     // 管理面板蜜罐状态：立即变ON
     dot.className='hp-dot on'; st.textContent='运行中';
-    portsEl.textContent='Telnet:23 HTTP:80';
+    portsEl.textContent='Telnet:2323 HTTP:8080';
     startBtn.style.display='none'; stopBtn.style.display='inline-block';
     // 端侧状态：立即变ON
     hpSide.textContent='ON'; hpSide.style.color='var(--green)';
     l('sys','[蜜罐] 正在启动...');
 
     fetch('/api/honeypot/start',{method:'POST'}).then(r=>{if(!r.ok)throw r;return r.json()}).then(d=>{
+      g_hpUserAction = false;
       if(d.code===0){ l('sys','[蜜罐] '+d.message); fa(); }
       else { l('sys','⚠ [蜜罐] '+d.message); }
     }).catch(async e=>{
+      g_hpUserAction = false;
       let reason = e.message||e;
       if(e instanceof Response) reason = await errText(e);
       l('sys','❌ [蜜罐] 启动失败: '+reason);
@@ -481,9 +501,11 @@ function toggleHoneypot(start){
     l('sys','[蜜罐] 正在停止...');
 
     fetch('/api/honeypot/stop',{method:'POST'}).then(r=>{if(!r.ok)throw r;return r.json()}).then(d=>{
+      g_hpUserAction = false;
       if(d.code===0){ l('sys','[蜜罐] '+d.message); fa(); }
       else { l('sys','⚠ [蜜罐] '+d.message); }
     }).catch(async e=>{
+      g_hpUserAction = false;
       let reason = e.message||e;
       if(e instanceof Response) reason = await errText(e);
       l('sys','❌ [蜜罐] 停止失败: '+reason);
@@ -694,6 +716,7 @@ function initCharts(){
   },2000);
 }
 setInterval(()=>{document.getElementById('clock').textContent=new Date().toLocaleTimeString('zh-CN',{hour12:false})},1000);
+let g_hpUserAction = false;  // 用户正在操作蜜罐（防止 fa() 覆盖）
 cws();initCharts();rbl();setInterval(fa,10000);setInterval(rbl,15000);
 </script>
 </body>

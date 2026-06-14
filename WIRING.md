@@ -2,29 +2,29 @@
 
 ## 扫描板（wifiwarden）— ESP32-S3 + ST7789 屏幕
 
-| GPIO | 功能 | 连接目标 |
-|------|------|---------|
-| 1 (TX) | UART发命令 → AP板RX | 接AP板 GPIO3 |
-| 3 (RX) | UART收数据 ← AP板TX | 接AP板 GPIO1 |
-| 2 | 屏幕背光 BLK | ST7789 背光 |
-| 6 | 蜂鸣器 | 有源蜂鸣器 (+) 串100Ω |
-| 7 | 状态LED | LED (+) 串220Ω → GND |
-| 8 | 屏幕 DC | ST7789 DC |
-| 9 | 屏幕 RST | ST7789 RST |
-| 10 | 屏幕 SCK | ST7789 SCL |
-| 11 | 屏幕 MOSI | ST7789 SDA |
-| 15 | 屏幕 CS | ST7789 CS |
-| GND | 公共地 | 屏幕GND + AP板GND |
+| GPIO   | 功能              | 连接目标                |
+| ------ | --------------- | ------------------- |
+| 1 (TX) | UART发命令 → AP板RX | 接AP板 GPIO3          |
+| 3 (RX) | UART收数据 ← AP板TX | 接AP板 GPIO1          |
+| 2      | 屏幕背光 BLK        | ST7789 背光           |
+| 6      | 蜂鸣器             | 有源蜂鸣器 (+) 串100Ω     |
+| 7      | 状态LED           | LED (+) 串220Ω → GND |
+| 8      | 屏幕 DC           | ST7789 DC           |
+| 9      | 屏幕 RST          | ST7789 RST          |
+| 10     | 屏幕 SCK          | ST7789 SCL          |
+| 11     | 屏幕 MOSI         | ST7789 SDA          |
+| 15     | 屏幕 CS           | ST7789 CS           |
+| GND    | 公共地             | 屏幕GND + AP板GND      |
 
 ## AP板（wifiwarden_ap）— ESP32-S3
 
-| GPIO | 功能 | 连接目标 |
-|------|------|---------|
-| 1 (TX) | UART发数据 → 扫描板RX | 接扫描板 GPIO3 |
-| 3 (RX) | UART收命令 ← 扫描板TX | 接扫描板 GPIO1 |
-| 7 | 红色LED（上游WiFi断开闪烁） | LED (+) 串220Ω → GND |
-| 8 | 绿色LED（上游WiFi已连常亮） | LED (+) 串220Ω → GND |
-| GND | 公共地 | 扫描板GND（必须共地） |
+| GPIO   | 功能                | 连接目标                |
+| ------ | ----------------- | ------------------- |
+| 1 (TX) | UART发数据 → 扫描板RX   | 接扫描板 GPIO3          |
+| 3 (RX) | UART收命令 ← 扫描板TX   | 接扫描板 GPIO1          |
+| 7      | 红色LED（上游WiFi断开闪烁） | LED (+) 串220Ω → GND |
+| 8      | 绿色LED（上游WiFi已连常亮） | LED (+) 串220Ω → GND |
+| GND    | 公共地               | 扫描板GND（必须共地）        |
 
 ## UART 交叉接线
 
