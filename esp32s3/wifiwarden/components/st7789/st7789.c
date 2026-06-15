@@ -290,7 +290,7 @@ esp_err_t st7789_init(spi_host_device_t host, gpio_num_t mosi, gpio_num_t sck, g
     if (ret != ESP_OK) return ret;
 
     spi_device_interface_config_t dev_cfg = {
-        .clock_speed_hz = 10 * 1000 * 1000,  // SPI时钟10MHz（GPIO矩阵引脚，高频信号劣化风险）
+        .clock_speed_hz = 8 * 1000 * 1000,   // SPI时钟8MHz（2.4寸面板信号建立时间要求）
         .mode = 0,
         .spics_io_num = cs,
         .queue_size = 1
@@ -329,7 +329,7 @@ esp_err_t st7789_init(spi_host_device_t host, gpio_num_t mosi, gpio_num_t sck, g
         0xD0, 2, 0xA4, 0xA1,
         0xE0, 14, 0xD0, 0x04, 0x0D, 0x11, 0x13, 0x2B, 0x3F, 0x54, 0x4C, 0x18, 0x0D, 0x0B, 0x1F, 0x23,
         0xE1, 14, 0xD0, 0x04, 0x0C, 0x11, 0x13, 0x2C, 0x3F, 0x44, 0x51, 0x2F, 0x1F, 0x1F, 0x20, 0x23,
-        0x21, 0xFF, 10,   // INVON
+        0x20, 0xFF, 10,   // INVOFF — 2.4" panel needs inversion OFF
         0x29, 0xFF, 10,
         0x00
     };

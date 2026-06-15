@@ -414,10 +414,15 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         if (g_blacklist_mutex) xSemaphoreTake(g_blacklist_mutex, portMAX_DELAY);
         bool blocked = is_mac_blacklisted(event->mac);
         if (blocked) {
+            // 先通知扫描板：即将踢人，防止其误计为 Deauth 攻击
+            char prekick[32];
+            int plen = snprintf(prekick, sizeof(prekick), "PREKICK:" MACSTR "\n", MAC2STR(event->mac));
+            uart_write_bytes(UART_NUM, prekick, plen);
+            vTaskDelay(pdMS_TO_TICKS(80));  // 等扫描板处理 PREKICK
             uint16_t aid = 0;
             if (esp_wifi_ap_get_sta_aid(event->mac, &aid) == ESP_OK) {
                 esp_wifi_deauth_sta(aid);
-                ESP_LOGW(TAG, "Blacklisted device " MACSTR " kicked immediately!", MAC2STR(event->mac));
+                ESP_LOGW(TAG, "Blacklisted device " MACSTR " kicked immediately (PREKICK sent)!", MAC2STR(event->mac));
             }
         }
         if (g_blacklist_mutex) xSemaphoreGive(g_blacklist_mutex);
@@ -552,12 +557,30 @@ static void uart_receive_task(void *pvParameters) {
             if (parse_mac_str(mac_str, target_mac)) {
                 ESP_LOGW(TAG, "KICK command received, disconnecting " MACSTR,
                          MAC2STR(target_mac));
-                // 通过MAC获取AID，再发送Deauth帧断开设备
+                // 先发 PREKICK 通知扫描板豁免此次 Deauth
+                char prekick[32];
+                int plen = snprintf(prekick, sizeof(prekick), "PREKICK:" MACSTR "\n", MAC2STR(target_mac));
+                uart_write_bytes(UART_NUM, prekick, plen);
+                vTaskDelay(pdMS_TO_TICKS(80));
+                // 先尝试 get_sta_aid，失败则遍历 station list 用索引推算 AID
                 uint16_t aid = 0;
-                if (esp_wifi_ap_get_sta_aid(target_mac, &aid) == ESP_OK) {
+                esp_err_t aid_ret = esp_wifi_ap_get_sta_aid(target_mac, &aid);
+                if (aid_ret == ESP_OK && aid > 0) {
                     esp_wifi_deauth_sta(aid);
+                    ESP_LOGW(TAG, "Deauth sent to " MACSTR " (AID=%u via get_sta_aid)", MAC2STR(target_mac), aid);
                 } else {
-                    ESP_LOGW(TAG, "Failed to get AID for " MACSTR, MAC2STR(target_mac));
+                    // esp_wifi_ap_get_sta_aid 在部分 IDF 版本不可靠，用 station list 兜底
+                    wifi_sta_list_t sta_list;
+                    if (esp_wifi_ap_get_sta_list(&sta_list) == ESP_OK) {
+                        for (int i = 0; i < sta_list.num; i++) {
+                            if (memcmp(sta_list.sta[i].mac, target_mac, 6) == 0) {
+                                uint16_t fallback_aid = (uint16_t)(i + 1);  // SoftAP 按连接顺序分配AID
+                                esp_wifi_deauth_sta(fallback_aid);
+                                ESP_LOGW(TAG, "Deauth sent to " MACSTR " (AID=%u fallback)", MAC2STR(target_mac), fallback_aid);
+                                break;
+                            }
+                        }
+                    }
                 }
                 // 加入黑名单，防止设备重连
                 if (g_blacklist_mutex) xSemaphoreTake(g_blacklist_mutex, portMAX_DELAY);

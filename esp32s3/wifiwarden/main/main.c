@@ -16,6 +16,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <inttypes.h>
 #include <errno.h>
@@ -79,7 +80,7 @@ static const char *TAG = "WiFiWarden";
 // ==================== 端口扫描配置 ====================
 #define PORT_SCAN_INTERVAL_SEC  CONFIG_PORT_SCAN_INTERVAL  // 端口扫描间隔（秒）
 #define TCP_CONNECT_TIMEOUT_MS  500   // TCP端口扫描连接超时（毫秒）
-#define TCP_PROBE_TIMEOUT_MS    100   // 主机发现探测超时（毫秒，100ms足够局域网判断）
+#define TCP_PROBE_TIMEOUT_MS    250   // 主机发现探测超时（毫秒，需覆盖ARP+SYN往返）
 #define MAX_SCANNED_HOSTS       20    // 最多记录的扫描主机数
 #define TARGET_SUBNET_PREFIX    "192.168.4"  // AP板默认子网前缀
 
@@ -268,6 +269,31 @@ static char g_known_host_ips[MAX_SCANNED_HOSTS][16];
 static char g_known_host_macs[MAX_SCANNED_HOSTS][18];
 static char g_known_host_names[MAX_SCANNED_HOSTS][32];  // DHCP hostname
 static uint8_t g_known_host_count = 0;
+
+// 扫描板本地黑名单：阻止已拉黑设备重复进入扫描目标列表
+static char g_local_bl_macs[MAX_SCANNED_HOSTS][18];
+static uint8_t g_local_bl_count = 0;
+
+static bool is_locally_blacklisted(const char *mac) {
+    for (int i = 0; i < g_local_bl_count; i++)
+        if (strcasecmp(g_local_bl_macs[i], mac) == 0) return true;
+    return false;
+}
+static void local_bl_add(const char *mac) {
+    if (is_locally_blacklisted(mac) || g_local_bl_count >= MAX_SCANNED_HOSTS) return;
+    strncpy(g_local_bl_macs[g_local_bl_count], mac, 17);
+    g_local_bl_macs[g_local_bl_count][17] = '\0';
+    g_local_bl_count++;
+}
+static void local_bl_remove(const char *mac) {
+    for (int i = 0; i < g_local_bl_count; i++) {
+        if (strcasecmp(g_local_bl_macs[i], mac) == 0) {
+            memmove(g_local_bl_macs[i], g_local_bl_macs[i + 1], (g_local_bl_count - i - 1) * 18);
+            g_local_bl_count--;
+            return;
+        }
+    }
+}
 static uint32_t g_last_host_rx_ms = 0;   // 上次收到HOST的时间，用于检测批次边界
 static SemaphoreHandle_t g_known_host_mutex = NULL;
 
@@ -282,13 +308,45 @@ static char s_device_mac_str[18];
 
 // ==================== 工具函数 ====================
 
+// 管理员触发 deauth 白名单：防止管理踢人操作被误计为攻击
+#define ADMIN_WL_SIZE    4
+#define ADMIN_WL_TIMEOUT_MS  3000   // 3秒超时
+static uint8_t  g_admin_deauth_wl[ADMIN_WL_SIZE][6];
+static uint32_t g_admin_deauth_wl_ts[ADMIN_WL_SIZE];
+static uint8_t  g_admin_wl_idx = 0;
+
+static void admin_wl_add(const uint8_t *mac) {
+    memcpy(g_admin_deauth_wl[g_admin_wl_idx % ADMIN_WL_SIZE], mac, 6);
+    g_admin_deauth_wl_ts[g_admin_wl_idx % ADMIN_WL_SIZE] = (uint32_t)(esp_timer_get_time() / 1000);
+    g_admin_wl_idx++;
+}
+
+static bool admin_wl_check(const uint8_t *mac) {
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    for (int i = 0; i < ADMIN_WL_SIZE; i++) {
+        if (now - g_admin_deauth_wl_ts[i] < ADMIN_WL_TIMEOUT_MS) {
+            if (memcmp(g_admin_deauth_wl[i], mac, 6) == 0) return true;
+        }
+    }
+    return false;
+}
+
 // 通过UART向AP板发送踢设备命令
 // 当发现高危端口或弱口令时，自动断开该设备
 static void kick_device(const char *mac_str) {
+    // 解析MAC加入白名单，防止随后AP发的deauth被误计为攻击
+    unsigned int m[6];
+    if (sscanf(mac_str, "%x:%x:%x:%x:%x:%x",
+               &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) == 6) {
+        uint8_t mac_bytes[6];
+        for (int i = 0; i < 6; i++) mac_bytes[i] = (uint8_t)m[i];
+        admin_wl_add(mac_bytes);
+        ESP_LOGI(TAG, "Admin kick: %s → deauth exempted", mac_str);
+    }
     char buffer[32];
     int len = snprintf(buffer, sizeof(buffer), "KICK:%s\n", mac_str);
     uart_write_bytes(UART_NUM, buffer, len);
-    ESP_LOGW(TAG, "Sent KICK command for %s", mac_str);
+    ESP_LOGW(TAG, "Sent KICK command for %s (deauth exempted)", mac_str);
 }
 
 // MAC地址转可读字符串
@@ -481,6 +539,18 @@ static void uart_receive_task(void *pvParameters) {
 
                             if (g_ap_count_mutex) xSemaphoreGive(g_ap_count_mutex);
                             ESP_LOGI(TAG, "UART: DEV:%d", count);
+                        }
+                    }
+                    // 解析 "PREKICK:AA:BB:CC:DD:EE:FF" - AP板提前通知即将踢人
+                    else if (strncmp(line_start, "PREKICK:", 8) == 0) {
+                        char *mac_str = line_start + 8;
+                        unsigned int m[6];
+                        if (sscanf(mac_str, "%x:%x:%x:%x:%x:%x",
+                                   &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) == 6) {
+                            uint8_t mac_bytes[6];
+                            for (int i = 0; i < 6; i++) mac_bytes[i] = (uint8_t)m[i];
+                            admin_wl_add(mac_bytes);
+                            ESP_LOGI(TAG, "PREKICK received: %s → deauth exempted", mac_str);
                         }
                     }
                     // 解析 "WIFI:SSID,RSSI" - AP板上游WiFi信息
@@ -720,8 +790,12 @@ static void wifi_promiscuous_callback(void *buf, wifi_promiscuous_pkt_type_t typ
     switch (frame_subtype) {
     case WIFI_FRAME_SUBTYPE_DEAUTH: {
         // ======== Deauth帧检测 ========
-        // Deauth帧用于断开WiFi连接。正常情况下AP或设备会偶尔发送，
-        // 但短时间内大量Deauth帧意味着有人在执行Deauth攻击（WiFi干扰攻击）
+        // 管理触发的踢人操作不记为攻击（addr1=目标设备MAC）
+        if (admin_wl_check(addr1)) {
+            ESP_LOGI(TAG, "DEAUTH (admin kick, exempted): Dst=%02X:%02X:%02X:%02X:%02X:%02X",
+                     addr1[0], addr1[1], addr1[2], addr1[3], addr1[4], addr1[5]);
+            break;  // 跳过统计，不计入攻击
+        }
         g_total_deauth_frames++;
 
         // 提取Reason Code（帧体前2字节，位于24字节头部之后）
@@ -850,6 +924,11 @@ static bool scan_port(const char *ip, uint16_t port) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) return false;
 
+    // 设置 SO_LINGER(l_onoff=1,l_linger=0): close() 时发 RST 而非 FIN，
+    // 避免 TIME_WAIT 堆积耗尽 lwIP socket 池导致 Wi-Fi 栈崩溃
+    struct linger lg = {.l_onoff = 1, .l_linger = 0};
+    setsockopt(sock, SOL_SOCKET, SO_LINGER, &lg, sizeof(lg));
+
     // 设置非阻塞模式，以便使用select实现超时控制
     int flags = fcntl(sock, F_GETFL, 0);
     fcntl(sock, F_SETFL, flags | O_NONBLOCK);
@@ -902,8 +981,9 @@ static bool scan_port(const char *ip, uint16_t port) {
  * 只要任一端口有响应就说明主机存活
  */
 static bool is_host_alive(const char *ip) {
-    // 探测端口列表：覆盖常见服务，提高发现率
-    static const uint16_t probe_ports[] = {80, 22};  // 只探测2个最常见端口，大幅加速
+    // 探测端口列表：覆盖各平台常见服务
+    // 80=HTTP(IoT/路由器) 445=SMB(Windows) 5555=ADB(Android) 22=SSH(Linux)
+    static const uint16_t probe_ports[] = {80, 445, 5555, 22};
     static const int probe_count = sizeof(probe_ports) / sizeof(probe_ports[0]);
 
     for (int p = 0; p < probe_count; p++) {
@@ -914,6 +994,10 @@ static bool is_host_alive(const char *ip) {
 
         int sock = socket(AF_INET, SOCK_STREAM, 0);
         if (sock < 0) continue;
+
+        // SO_LINGER 立即关闭避免 TIME_WAIT 积压
+        struct linger lg = {.l_onoff = 1, .l_linger = 0};
+        setsockopt(sock, SOL_SOCKET, SO_LINGER, &lg, sizeof(lg));
 
         int flags = fcntl(sock, F_GETFL, 0);
         fcntl(sock, F_SETFL, flags | O_NONBLOCK);
@@ -1482,7 +1566,9 @@ static void port_scan_task(void *pvParameters) {
             continue;
         }
 
+        int64_t scan_t0 = esp_timer_get_time();  // 记录扫描开始时间
         g_port_scan_running = true;
+        g_alert_active = false;  // 新扫描周期清除历史告警阻塞标志
         ESP_LOGI(TAG, "========== Network Scan Start ==========");
 
         // 本轮扫描结果缓存
@@ -1501,8 +1587,9 @@ static void port_scan_task(void *pvParameters) {
         // 从已知主机IP列表获取目标
         if (g_known_host_mutex) xSemaphoreTake(g_known_host_mutex, portMAX_DELAY);
         for (int i = 0; i < g_known_host_count && target_ip_count < MAX_SCANNED_HOSTS; i++) {
-            // 跳过扫描板自身的IP
-            if (strcmp(g_known_host_ips[i], g_sta_ip_str) != 0) {
+            // 跳过扫描板自身的IP + 已拉黑的MAC
+            if (strcmp(g_known_host_ips[i], g_sta_ip_str) != 0 &&
+                !is_locally_blacklisted(g_known_host_macs[i])) {
                 strncpy(target_ips[target_ip_count], g_known_host_ips[i], 15);
                 target_ips[target_ip_count][15] = '\0';
                 target_ip_count++;
@@ -1511,6 +1598,26 @@ static void port_scan_task(void *pvParameters) {
         if (g_known_host_mutex) xSemaphoreGive(g_known_host_mutex);
 
         ESP_LOGI(TAG, "Phase 1: Target host discovery (%d known IPs)...", target_ip_count);
+
+        // ---- ARP 预充能：对每个目标IP发一个速开速关的TCP连接，强制 lwIP 发起 ARP 请求 ----
+        // 投产环境中 Wi-Fi STA 刚连上 AP 时，局域网设备的 ARP 缓存为空。
+        // 直接跑 is_host_alive() 会因为 ARP 解析与 connect() 绑定在同一个超时窗口内导致
+        // 首次扫描大面积丢目标。先做一轮"预触发"让 ARP 表就绪，后续探测才能稳定命中。
+        for (int i = 0; i < target_ip_count; i++) {
+            int sock = socket(AF_INET, SOCK_STREAM, 0);
+            if (sock < 0) continue;
+            struct linger lg = {.l_onoff = 1, .l_linger = 0};
+            setsockopt(sock, SOL_SOCKET, SO_LINGER, &lg, sizeof(lg));
+            int flags = fcntl(sock, F_GETFL, 0);
+            fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+            struct sockaddr_in addr = {0};
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons(80);
+            addr.sin_addr.s_addr = inet_addr(target_ips[i]);
+            connect(sock, (struct sockaddr *)&addr, sizeof(addr));  // 触发 ARP，不等结果
+            close(sock);
+        }
+        vTaskDelay(pdMS_TO_TICKS(300));  // 留给 ARP 回复窗口
 
         // 只扫描AP板告知的已知IP
         for (int i = 0; i < target_ip_count && g_sta_connected; i++) {
@@ -1536,6 +1643,25 @@ static void port_scan_task(void *pvParameters) {
         }
 
         ESP_LOGI(TAG, "Phase 1 complete: %d hosts found", alive_count);
+
+        // 首轮 0 发现 + 有目标 → 再等一轮 ARP 后重试一次（应对慢速网络）
+        if (alive_count == 0 && target_ip_count > 0) {
+            ESP_LOGW(TAG, "Phase 1 retry: ARP may be slow, waiting 500ms...");
+            vTaskDelay(pdMS_TO_TICKS(500));
+            for (int i = 0; i < target_ip_count && g_sta_connected; i++) {
+                if (g_alert_active) break;
+                if (is_host_alive(target_ips[i])) {
+                    if (alive_count < MAX_SCANNED_HOSTS) {
+                        strncpy(alive_ips[alive_count], target_ips[i], 15);
+                        alive_ips[alive_count][15] = '\0';
+                        alive_count++;
+                    }
+                    ESP_LOGI(TAG, "Host alive (retry): %s (%d/%d)", target_ips[i], alive_count, target_ip_count);
+                }
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+            ESP_LOGI(TAG, "Phase 1 retry complete: %d hosts found", alive_count);
+        }
 
         // ====== 阶段2：端口扫描 ======
         // 对每个存活主机扫描高危端口
@@ -1659,6 +1785,7 @@ static void port_scan_task(void *pvParameters) {
                 scan_results[h].mac_str[0] != '\0') {
                 ESP_LOGW(TAG, "Auto-kicking high risk host %s (%s)",
                          alive_ips[h], scan_results[h].mac_str);
+                local_bl_add(scan_results[h].mac_str);  // 本地记录防止重复扫描
                 kick_device(scan_results[h].mac_str);
             }
 
@@ -1714,6 +1841,8 @@ static void port_scan_task(void *pvParameters) {
                  alive_count, total_open, (int)g_current_risk_level);
 
         g_port_scan_running = false;
+        int64_t scan_ms = (esp_timer_get_time() - scan_t0) / 1000;  //扫描耗时（ms）
+        ESP_LOGW(TAG, "⏱ [BENCH] Scan %d hosts done in %lld ms", g_scanned_host_count, scan_ms);  // 打印扫描耗时
 
         // 等待下一个扫描周期（可被云端命令提前唤醒）
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(PORT_SCAN_INTERVAL_SEC * 1000));
@@ -2049,9 +2178,25 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
                         if (params) {
                             cJSON *target_mac = cJSON_GetObjectItem(params, "target_mac");
                             if (target_mac && cJSON_IsString(target_mac)) {
-                                ESP_LOGW(TAG, "[BLACKLIST] Kicking device: %s",
-                                         target_mac->valuestring);
-                                kick_device(target_mac->valuestring);
+                                const char *bl_mac = target_mac->valuestring;
+                                ESP_LOGW(TAG, "[BLACKLIST] Kicking device: %s", bl_mac);
+                                local_bl_add(bl_mac);  // 本地记录，阻止重复扫描
+                                // 从 known_hosts 清除，立即停止出现在扫描列表
+                                if (g_known_host_mutex) xSemaphoreTake(g_known_host_mutex, pdMS_TO_TICKS(100));
+                                for (int k = 0; k < g_known_host_count; k++) {
+                                    if (strcasecmp(g_known_host_macs[k], bl_mac) == 0) {
+                                        memmove(g_known_host_macs[k], g_known_host_macs[k + 1],
+                                                (g_known_host_count - k - 1) * 18);
+                                        memmove(g_known_host_ips[k], g_known_host_ips[k + 1],
+                                                (g_known_host_count - k - 1) * 16);
+                                        memmove(g_known_host_names[k], g_known_host_names[k + 1],
+                                                (g_known_host_count - k - 1) * 32);
+                                        g_known_host_count--;
+                                        break;
+                                    }
+                                }
+                                if (g_known_host_mutex) xSemaphoreGive(g_known_host_mutex);
+                                kick_device(bl_mac);
                             }
                         }
                     } else if (strcmp(action->valuestring, "unblacklist") == 0) {
@@ -2060,8 +2205,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
                         if (params) {
                             cJSON *target_mac = cJSON_GetObjectItem(params, "target_mac");
                             if (target_mac && cJSON_IsString(target_mac)) {
-                                ESP_LOGI(TAG, "[UNBLACKLIST] Removing device: %s",
-                                         target_mac->valuestring);
+                                const char *ubl_mac = target_mac->valuestring;
+                                ESP_LOGI(TAG, "[UNBLACKLIST] Removing device: %s", ubl_mac);
+                                local_bl_remove(ubl_mac);  // 允许重新出现在扫描列表
                                 // 通过UART通知AP板从黑名单移除
                                 char buffer[32];
                                 int len = snprintf(buffer, sizeof(buffer), "UNBLK:%s\n", target_mac->valuestring);
@@ -2419,7 +2565,7 @@ static void display_update_task(void *pvParameters) {
             uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
             if (now_ms - g_deauth_last_detected_ms > DEAUTH_ALERT_TIMEOUT_MS) {
                 g_deauth_alert_trigger = false;
-                // 只清除Deauth告警标志，不重置risk_level（由port_scan_task统一管理）
+                g_alert_active = false;  // 同步解除扫描暂停标志
                 ESP_LOGI(TAG, "Deauth alert auto-cleared (display task, 30s timeout)");
             }
         }
@@ -2472,8 +2618,8 @@ void app_main(void) {
     // UART接收任务：接收AP板数据，优先级4（较高，保证实时性）
     xTaskCreate(uart_receive_task, "uart_rx", 4096, NULL, 4, NULL);
     // 端口扫描任务：周期性扫描网段，优先级2（较低，避免影响实时性）
-    // 栈空间8KB：socket操作需要较大缓冲区
-    xTaskCreate(port_scan_task, "port_scan", 8192, NULL, 2, &g_port_scan_task_handle);
+    // 栈空间12KB：扫描期间大量socket+linger操作需要额外栈空间
+    xTaskCreate(port_scan_task, "port_scan", 12288, NULL, 2, &g_port_scan_task_handle);
 
     // MQTT云端上报任务：定时将扫描结果发布到云端
     xTaskCreate(mqtt_publish_task, "mqtt_pub", 8192, NULL, 2, NULL);

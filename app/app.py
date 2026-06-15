@@ -69,31 +69,45 @@ def on_mqtt_message(topic: str, payload: dict):
 
 
 def _handle_sense_data(topic: str, payload: dict):
-    mac = payload.get("mac", "unknown")
+    scanner_mac = payload.get("mac", "unknown")
 
     deauth = payload.get("deauth", {})
     if deauth and deauth.get("in_window", 0) >= 3:
-        state.add_alert(mac, "deauth", 4, f"Deauth攻击窗口内{deauth.get('in_window', 0)}次")
+        state.add_alert(scanner_mac, "deauth", 4, f"Deauth攻击窗口内{deauth.get('in_window', 0)}次")
 
     hosts = payload.get("hosts", [])
-    open_ports_found = any(len(h.get("open_ports", [])) > 0 for h in hosts)
-    weak_found = any(h.get("weak_http") or h.get("weak_telnet") or h.get("weak_ftp") for h in hosts)
+    # 过滤已拉黑设备：不分析、不告警、不触发AI
+    active_hosts = [h for h in hosts if not state.is_blacklisted(h.get("mac", ""))]
+    skipped = len(hosts) - len(active_hosts)
+    if skipped:
+        print(f"[MQTT] 跳过{skipped}台已拉黑设备，剩余{len(active_hosts)}台待分析")
+
+    open_ports_found = any(len(h.get("open_ports", [])) > 0 for h in active_hosts)
+    weak_found = any(h.get("weak_http") or h.get("weak_telnet") or h.get("weak_ftp") for h in active_hosts)
     deauth_active = payload.get("deauth", {}).get("in_window", 0) >= 3
 
-    if weak_found:
-        state.add_alert(mac, "weak_password", 3, "检测到弱口令设备")
-    if open_ports_found and not weak_found:
-        state.add_alert(mac, "port_risk", 2, f"发现{sum(len(h.get('open_ports',[])) for h in hosts)}个高危端口")
+    # 提取第一个风险设备的MAC
+    risk_device_mac = scanner_mac
+    for h in active_hosts:
+        if h.get("open_ports") or h.get("weak_http") or h.get("weak_telnet") or h.get("weak_ftp"):
+            risk_device_mac = h.get("mac", scanner_mac)
+            break
 
-    should_ai = (open_ports_found or weak_found or deauth_active) and bool(hosts)
+    if weak_found:
+        state.add_alert(risk_device_mac, "weak_password", 3, "检测到弱口令设备")
+    if open_ports_found and not weak_found:
+        state.add_alert(risk_device_mac, "port_risk", 2, f"发现{sum(len(h.get('open_ports',[])) for h in active_hosts)}个高危端口")
+
+    should_ai = (open_ports_found or weak_found or deauth_active) and bool(active_hosts)
     if ai_agent and Config.AI_API_KEY and should_ai:
         try:
-            ai_input = {"mac": mac, "ip": payload.get("ip"), "hosts": hosts,
+            ai_input = {"mac": scanner_mac, "ip": payload.get("ip"), "hosts": active_hosts,
                         "deauth": payload.get("deauth", {})}
             analysis = ai_agent.analyze(ai_input)
-            _execute_defense(mac, analysis.get("risk_level", 0), analysis)
+            defense_mac = risk_device_mac if (open_ports_found or weak_found) else scanner_mac
+            _execute_defense(defense_mac, analysis.get("risk_level", 0), analysis)
             asyncio.run_coroutine_threadsafe(
-                broadcast({"type": "ai_analysis", "mac": mac, "analysis": analysis}), loop
+                broadcast({"type": "ai_analysis", "mac": scanner_mac, "analysis": analysis}), loop
             )
         except Exception as e:
             print(f"[AI] 分析失败: {e}")
@@ -118,7 +132,7 @@ def _execute_defense(mac: str, risk: int, analysis: dict):
         state.add_alert(mac, threat, risk, analysis.get("risk_reason", ""), action)
         if mqtt_client and mqtt_client.is_connected():
             mqtt_client.send_alert(mac, threat, risk, analysis.get("risk_reason", ""))
-    if risk >= 3:
+    if risk >= 3 and not state.is_blacklisted(mac):
         state.blacklist_device(mac)
         if mqtt_client and mqtt_client.is_connected():
             mqtt_client.send_blacklist(mac, mac)
